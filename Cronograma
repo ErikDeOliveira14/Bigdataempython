@@ -1,0 +1,25 @@
+Cronograma de atividades proposto
+Período	Atividade	Responsáveis
+
+20 a 23/10/2026	Organização inicial do projeto, definição do tema, escolha da empresa e divisão das responsabilidades	Todos os integrantes
+
+26 a 30/10/2026	Contato com a Atlantic Ocean Services, levantamento das necessidades e obtenção da base de dados	Erik
+
+02 a 05/11/2026	Análise exploratória da planilha, identificação das colunas e verificação de inconsistências	Lucas e Cristiane
+
+06 a 10/11/2026	Planejamento do tratamento dos dados utilizando Python e Pandas	Erik, Lucas e Kauan
+
+11 a 13/11/2026	Definição dos KPIs, planejamento dos gráficos e organização da documentação	Kauan, Douglas e Cristiane
+
+14 a 16/11/2026	Elaboração e revisão da versão preliminar do relatório acadêmico	Cristiane, Douglas e Lucas
+
+17/11/2026	Apresentação preliminar do relatório ao professor orientador	Todos os integrantes
+
+18 a 20/11/2026	Execução e validação do tratamento dos dados, cálculo dos indicadores e exportação da planilha tratada	Erik, Lucas e Kauan
+
+21 a 22/11/2026	Desenvolvimento e finalização do dashboard no Power BI, incluindo gráficos e filtros	Douglas, Kauan e Cristiane
+
+23/11/2026	Testes finais, organização do repositório GitHub, revisão da documentação e preparação da apresentação	Douglas, Lucas e Cristiane
+
+24/11/2026	Apresentação final do projeto, demonstrando a solução desenvolvida	Todos os integrantes
+
