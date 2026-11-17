@@ -1,243 +1,217 @@
 import re
 import sys
 import itertools
+import statistics
 import pandas as pd
+from openpyxl.styles import PatternFill
 
 ARQUIVO_ENTRADA = sys.argv[1] if len(sys.argv) > 1 else 'TRABALHO.xlsx'
 ARQUIVO_SAIDA = sys.argv[2] if len(sys.argv) > 2 else 'TRABALHO_TRATADO.xlsx'
+HOJE = pd.Timestamp(sys.argv[3]) if len(sys.argv) > 3 else pd.Timestamp.today().normalize()
 
-DURACAO_MAX_VALIDA = 45
-PENALIDADE_CORRECAO = 40
-JANELA_VIZINHOS = 8
-LIMITE_REVISAO = 365
-DISTANCIA_CRONOLOGICA_MAX = 30
-
-df = pd.read_excel(ARQUIVO_ENTRADA)
-df.columns = df.columns.str.strip()
-
-
-def parse_data(v):
-    if pd.isna(v):
-        return pd.NaT, False
-
-    if hasattr(v, 'year'):
-        ts = pd.Timestamp(v)
-        return ts, (ts.day <= 12 and ts.day != ts.month)
-
-    if isinstance(v, (int, float)):
-        return pd.to_datetime(v, unit='D', origin='1899-12-30', errors='coerce'), False
-
-    s = str(v).strip().replace(';', ':')
-    if not s:
-        return pd.NaT, False
-
-    if re.match(r'^\d{4}-\d{2}-\d{2}', s):
-        return pd.to_datetime(s, errors='coerce'), False
-
-    s = re.sub(
-        r'^(\d{1,2}/\d{1,2}/)(\d{3})(?=\s|$)',
-        lambda m: m.group(1) + m.group(2)[:2] + '2' + m.group(2)[2:],
-        s
-    )
-
-    if re.match(r'^\d+(\.\d+)?$', s):
-        return pd.to_datetime(float(s), unit='D', origin='1899-12-30', errors='coerce'), False
-
-    return pd.to_datetime(s, dayfirst=True, errors='coerce'), False
-
-
-def parse_com_nota(v):
-    if isinstance(v, str):
-        t = v.strip()
-        t = re.sub(
-            r'^(\d{1,2}/\d{1,2}/)(\d{3})(?=\s|$)',
-            lambda m: m.group(1) + m.group(2)[:2] + '2' + m.group(2)[2:],
-            t
-        )
-        m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})(?=\s|$)', t)
-        if m:
-            a, b, ano = int(m.group(1)), int(m.group(2)), int(m.group(3))
-            if a <= 12 < b:
-                try:
-                    return pd.Timestamp(ano, a, b), False, 'texto em formato americano (mês > 12)'
-                except ValueError:
-                    pass
-    ts, amb = parse_data(v)
-    return ts, amb, ''
-
-
-ini_p = df['Data Inicial'].apply(parse_com_nota)
-fim_p = df['Data Final'].apply(parse_com_nota)
-
-df['Data Inicial DT'] = pd.to_datetime(ini_p.str[0], errors='coerce').dt.normalize()
-df['Data Final DT'] = pd.to_datetime(fim_p.str[0], errors='coerce').dt.normalize()
-df['_ini_amb'] = ini_p.str[1].astype(bool)
-df['_fim_amb'] = fim_p.str[1].astype(bool)
-
-
-def troca_dia_mes(ts):
-    try:
-        return ts.replace(month=ts.day, day=ts.month)
-    except ValueError:
-        return None
-
-
-def muda_ano(ts, delta):
-    try:
-        return ts.replace(year=ts.year + delta)
-    except ValueError:
-        return None
-
-
-def opcoes(ts, ambigua):
-    ops = [(ts, '', 0)]
-    if ambigua:
-        t = troca_dia_mes(ts)
-        if t is not None:
-            ops.append((t, 'dia/mês trocados', 1))
-    for d in (-1, 1):
-        t = muda_ano(ts, d)
-        if t is not None:
-            ops.append((t, f'ano {d:+d}', 1))
-    return ops
-
-
-def referencia_local(serie_dias, usar_mascara, i, minimo=5):
-    janela = JANELA_VIZINHOS
-    while janela <= JANELA_VIZINHOS * 6:
-        ini = max(0, i - janela)
-        fim = min(len(serie_dias), i + janela + 1)
-        viz = [
-            serie_dias[j] for j in range(ini, fim)
-            if j != i and usar_mascara[j] and serie_dias[j] is not None
-        ]
-        if len(viz) >= minimo:
-            return float(pd.Series(viz).median())
-        janela += JANELA_VIZINHOS
-    return None
-
-
+DURACAO_MAX = 45
+PENALIDADE = 40
+JANELA = 8
+DIST_VIZINHO = 15
+DIST_ISOLADA = 30
+FATOR_DEMANDA = 1.20
 EPOCA = pd.Timestamp('2000-01-01')
-
-
-def corrige_linha(i, ini, fim, ini_amb, fim_amb, ref):
-    if pd.isna(ini) or pd.isna(fim):
-        return None
-    asis_valido = 0 <= (fim - ini).days <= DURACAO_MAX_VALIDA
-    melhor, melhor_custo = None, None
-    for (ni, di, ci), (nf, df_, cf) in itertools.product(opcoes(ini, ini_amb), opcoes(fim, fim_amb)):
-        ordens = [(ni, nf, 0)]
-        if not asis_valido:
-            ordens.append((nf, ni, 1))
-        for a, b, inv in ordens:
-            dur = (b - a).days
-            if not (0 <= dur <= DURACAO_MAX_VALIDA):
-                continue
-            dist = dist_fim = None
-            if ref is not None:
-                dist = abs((a - EPOCA).days - ref)
-                dist_fim = abs((b - EPOCA).days - ref)
-            n_corr = ci + cf + inv
-            if asis_valido and n_corr > 0 and (dist is None or dist > DISTANCIA_CRONOLOGICA_MAX):
-                continue
-            custo = n_corr * PENALIDADE_CORRECAO + (2 * dist + dist_fim if dist is not None else 0)
-            if melhor_custo is None or custo < melhor_custo:
-                partes = []
-                if inv:
-                    partes.append('Início e fim invertidos')
-                if di:
-                    partes.append(f'Inicial: {di}')
-                if df_:
-                    partes.append(f'Final: {df_}')
-                evid = 'duração original inválida' if not asis_valido else 'fora da ordem cronológica dos vizinhos'
-                melhor, melhor_custo = (a, b, '; '.join(partes), evid), custo
-    return melhor
-
-
-n = len(df)
-ini_orig = [pd.Timestamp(x[0]).normalize() if not pd.isna(x[0]) else pd.NaT for x in ini_p]
-fim_orig = [pd.Timestamp(x[0]).normalize() if not pd.isna(x[0]) else pd.NaT for x in fim_p]
-ini_amb = df['_ini_amb'].tolist()
-fim_amb = df['_fim_amb'].tolist()
-
-
-def consistente(a, b):
-    return (not pd.isna(a)) and (not pd.isna(b)) and 0 <= (b - a).days <= DURACAO_MAX_VALIDA
-
-
-ini_atual, fim_atual = list(ini_orig), list(fim_orig)
-mascara = [consistente(ini_atual[i], fim_atual[i]) and not ini_amb[i] for i in range(n)]
-
-for passada in range(3):
-    ini_dias = [(x - EPOCA).days if not pd.isna(x) else None for x in ini_atual]
-    novos_ini, novos_fim, motivos, evidencias = list(ini_atual), list(fim_atual), [''] * n, [''] * n
-    for i in range(n):
-        ref = referencia_local(ini_dias, mascara, i)
-        r = corrige_linha(i, ini_orig[i], fim_orig[i], ini_amb[i], fim_amb[i], ref)
-        if r is not None:
-            novos_ini[i], novos_fim[i], motivos[i], evidencias[i] = r
-    mudou = sum(1 for i in range(n) if novos_ini[i] != ini_atual[i] or novos_fim[i] != fim_atual[i])
-    ini_atual, fim_atual = novos_ini, novos_fim
-    mascara = [consistente(ini_atual[i], fim_atual[i]) for i in range(n)]
-    if mudou == 0:
-        break
-
-df['Data Inicial DT'] = pd.to_datetime(pd.Series(ini_atual, index=df.index))
-df['Data Final DT'] = pd.to_datetime(pd.Series(fim_atual, index=df.index))
-
-notas_ini = ini_p.str[2].tolist()
-notas_fim = fim_p.str[2].tolist()
-for i in range(n):
-    extra = [
-        p for p in (
-            f'Inicial: {notas_ini[i]}' if notas_ini[i] else '',
-            f'Final: {notas_fim[i]}' if notas_fim[i] else ''
-        ) if p
-    ]
-    if extra:
-        motivos[i] = '; '.join(extra + ([motivos[i]] if motivos[i] else []))
-
-serie_motivos = pd.Series(motivos, index=df.index)
-print(f"Registros corrigidos automaticamente: {(serie_motivos != '').sum()}")
-print(serie_motivos.value_counts().drop('', errors='ignore').to_string())
-
-df['Duracao_Dias'] = (df['Data Final DT'] - df['Data Inicial DT']).dt.days
-revisar_mask = (df['Duracao_Dias'] < 0) | (df['Duracao_Dias'] > LIMITE_REVISAO) | df['Duracao_Dias'].isna()
-suspeitas = df[revisar_mask]
-print(f"\nRegistros para revisar manualmente: {len(suspeitas)}")
-if len(suspeitas):
-    print(suspeitas[['Navio', 'Data Inicial', 'Data Final', 'Duracao_Dias']].to_string())
-
-validas = df.loc[~revisar_mask, 'Duracao_Dias']
-print(f"\nDuração Média: {validas.mean():.2f} dias")
-print(f"Duração Mediana: {validas.median():.0f} dias")
-print(f"Maior duração (válida): {validas.max():.0f} dias")
-
-colunas_notas = [
+COLUNAS_NOTAS = [
     'Qualidade de serviço', 'Qualidade da Equipe', 'Cumprimento de Prazo',
     'Flexibilidade', 'Planejamento', 'Apresentação da Equipe',
     'Segurança', 'EPI', 'Liderança', 'Comunicação'
 ]
-df['ISG'] = df[colunas_notas].mean(axis=1)
-print(f"ISG Médio: {df['ISG'].mean():.2f}")
 
-df['Peso_Cenario_Sem_Taxas'] = 1.20
-demanda_simulada = int(len(df) * 1.20)
-print(f"Demanda Atual: {len(df)} registros")
-print(f"Demanda Simulada: {demanda_simulada} registros")
 
-df = df.drop(columns=['_ini_amb', '_fim_amb'])
+def limpa(ts):
+    return ts if pd.isna(ts) else ts.normalize()
 
-df['Data Inicial'] = df['Data Inicial DT'].dt.date
-df['Data Final'] = df['Data Final DT'].dt.date
-df = df.drop(columns=['Data Inicial DT', 'Data Final DT'])
 
+def serial(x):
+    return limpa(pd.to_datetime(float(x), unit='D', origin='1899-12-30', errors='coerce'))
+
+
+def ler_data(v):
+    if pd.isna(v):
+        return pd.NaT, False, ''
+    if hasattr(v, 'year'):
+        ts = pd.Timestamp(v).normalize()
+        return ts, ts.day <= 12 and ts.day != ts.month, ''
+    if isinstance(v, (int, float)):
+        return serial(v), False, ''
+    s = str(v).strip().replace(';', ':')
+    if re.match(r'^\d{4}-\d{2}-\d{2}', s):
+        return limpa(pd.to_datetime(s, errors='coerce')), False, ''
+    s = re.sub(r'^(\d{1,2}/\d{1,2}/)(\d{3})(?=\s|$)',
+               lambda m: m.group(1) + m.group(2)[:2] + '2' + m.group(2)[2:], s)
+    m = re.match(r'^(\d{1,2})/(\d{1,2})/(\d{4})(?=\s|$)', s)
+    if m:
+        a, b, ano = map(int, m.groups())
+        if a <= 12 < b:
+            try:
+                return pd.Timestamp(ano, a, b), False, 'texto em formato americano (mês > 12)'
+            except ValueError:
+                pass
+    if re.match(r'^\d+(\.\d+)?$', s):
+        return serial(s), False, ''
+    return limpa(pd.to_datetime(s, dayfirst=True, errors='coerce')), False, ''
+
+
+def opcoes(ts, amb):
+    ops = [(ts, '', 0)]
+    if amb:
+        try:
+            ops.append((ts.replace(month=ts.day, day=ts.month), 'dia/mês trocados', 1))
+        except ValueError:
+            pass
+    for d in (-1, 1):
+        try:
+            ops.append((ts.replace(year=ts.year + d), f'ano {d:+d}', 1))
+        except ValueError:
+            pass
+    return ops
+
+
+def valida(a, b):
+    return pd.notna(a) and pd.notna(b) and 0 <= (b - a).days <= DURACAO_MAX
+
+
+def referencia(dias, ok, i):
+    n = len(dias)
+    for janela in range(JANELA, JANELA * 6 + 1, JANELA):
+        viz = [dias[j] for j in range(max(0, i - janela), min(n, i + janela + 1)) if j != i and ok[j]]
+        if len(viz) >= 5:
+            ant = next((dias[j] for j in range(i - 1, max(-1, i - 49), -1) if ok[j]), None)
+            post = next((dias[j] for j in range(i + 1, min(n, i + 49)) if ok[j]), None)
+            return statistics.median(viz), ant, post
+    return None
+
+
+def dist_vizinho(ref, dia):
+    return min([abs(dia - v) for v in ref[1:] if v is not None], default=float('inf'))
+
+
+def corrige_linha(ini, fim, ini_amb, fim_amb, ref):
+    if pd.isna(ini) or pd.isna(fim):
+        return None
+    original_ok = valida(ini, fim) and fim <= HOJE
+    dia_ini = (ini - EPOCA).days
+    melhor, melhor_custo = None, None
+    for (ni, di, ci), (nf, df_, cf) in itertools.product(opcoes(ini, ini_amb), opcoes(fim, fim_amb)):
+        ordens = [(ni, nf, 0)] if original_ok else [(ni, nf, 0), (nf, ni, 1)]
+        for a, b, inv in ordens:
+            if not valida(a, b) or b > HOJE:
+                continue
+            n_corr = ci + cf + inv
+            dia_a = (a - EPOCA).days
+            custo = n_corr * PENALIDADE
+            if ref is not None:
+                custo += 2 * abs(dia_a - ref[0]) + abs((b - EPOCA).days - ref[0])
+            if original_ok and n_corr > 0 and (
+                    ref is None
+                    or dist_vizinho(ref, dia_ini) <= DIST_VIZINHO
+                    or dist_vizinho(ref, dia_a) > DIST_VIZINHO):
+                continue
+            if melhor_custo is None or custo < melhor_custo:
+                partes = (['Início e fim invertidos'] if inv else []) \
+                    + ([f'Inicial: {di}'] if di else []) + ([f'Final: {df_}'] if df_ else [])
+                melhor, melhor_custo = (a, b, '; '.join(partes)), custo
+    if melhor is None or not melhor[2]:
+        return None
+    if not valida(ini, fim):
+        return melhor + ('duração original inválida', 'alta')
+    if fim > HOJE:
+        return melhor + ('data posterior a hoje', 'baixa')
+    return melhor + ('fora da ordem cronológica dos vizinhos', 'baixa')
+
+
+df = pd.read_excel(ARQUIVO_ENTRADA)
+df.columns = df.columns.str.strip()
+
+lidas_ini = [ler_data(v) for v in df['Data Inicial']]
+lidas_fim = [ler_data(v) for v in df['Data Final']]
+ini_orig = [x[0] for x in lidas_ini]
+fim_orig = [x[0] for x in lidas_fim]
+ini_amb = [x[1] for x in lidas_ini]
+fim_amb = [x[1] for x in lidas_fim]
+n = len(df)
+
+ini_atual, fim_atual = list(ini_orig), list(fim_orig)
+ok = [valida(a, b) and not amb for a, b, amb in zip(ini_atual, fim_atual, ini_amb)]
+for _ in range(5):
+    dias = [None if pd.isna(x) else (x - EPOCA).days for x in ini_atual]
+    correcoes = [corrige_linha(ini_orig[i], fim_orig[i], ini_amb[i], fim_amb[i],
+                               referencia(dias, ok, i)) for i in range(n)]
+    novo_ini = [c[0] if c else ini_orig[i] for i, c in enumerate(correcoes)]
+    novo_fim = [c[1] if c else fim_orig[i] for i, c in enumerate(correcoes)]
+    terminou = novo_ini == ini_atual and novo_fim == fim_atual
+    ini_atual, fim_atual = novo_ini, novo_fim
+    ok = [valida(a, b) and (not amb or (a, b) != (ini_orig[i], fim_orig[i]))
+          for i, (a, b, amb) in enumerate(zip(ini_atual, fim_atual, ini_amb))]
+    if terminou:
+        break
+
+motivos, evidencias, confiancas = [], [], []
+for i, c in enumerate(correcoes):
+    notas = [f'{nome}: {l[i][2]}' for nome, l in (('Inicial', lidas_ini), ('Final', lidas_fim)) if l[i][2]]
+    motivo = '; '.join(notas + ([c[2]] if c else []))
+    motivos.append(motivo)
+    evidencias.append(c[3] if c else '')
+    confiancas.append(c[4] if c else ('alta' if motivo else ''))
+
+ini_s = pd.to_datetime(pd.Series(ini_atual, index=df.index))
+fim_s = pd.to_datetime(pd.Series(fim_atual, index=df.index))
+
+def texto_original(v):
+    if pd.isna(v):
+        return ''
+    return v.strftime('%d/%m/%Y %H:%M') if hasattr(v, 'strftime') else str(v).strip()
+
+saida = df.copy()
+saida['Data Inicial Original'] = df['Data Inicial'].map(texto_original)
+saida['Data Final Original'] = df['Data Final'].map(texto_original)
+saida['Data Inicial'] = ini_s.dt.date
+saida['Data Final'] = fim_s.dt.date
+saida['Duracao_Dias'] = (fim_s - ini_s).dt.days
+saida['ISG'] = df[COLUNAS_NOTAS].mean(axis=1)
+saida['Peso_Cenario_Sem_Taxas'] = FATOR_DEMANDA
+saida['Correcao_Motivo'] = motivos
+saida['Correcao_Evidencia'] = evidencias
+saida['Confianca_Correcao'] = confiancas
+
+dur_ok = saida['Duracao_Dias'].between(0, DURACAO_MAX)
+futura = (ini_s > HOJE) | (fim_s > HOJE)
+dias_ini = (ini_s - EPOCA).dt.days
+isolada = (dias_ini.diff().abs() > DIST_ISOLADA) & (dias_ini.diff(-1).abs() > DIST_ISOLADA)
+saida['Revisar_Manual'] = ~dur_ok | futura | isolada | (saida['Confianca_Correcao'] == 'baixa')
+
+print(f"Registros corrigidos automaticamente: {(saida['Correcao_Motivo'] != '').sum()}")
+print(saida['Correcao_Motivo'].value_counts().drop('', errors='ignore').to_string())
+revisar = saida[saida['Revisar_Manual']]
+print(f"\nRegistros para revisar manualmente: {len(revisar)}")
+if len(revisar):
+    print(revisar[['Navio', 'Data Inicial Original', 'Data Final Original',
+                   'Data Inicial', 'Data Final', 'Confianca_Correcao']].to_string())
+validas = saida.loc[dur_ok, 'Duracao_Dias']
+print(f"\nDuração Média: {validas.mean():.2f} dias")
+print(f"Duração Mediana: {validas.median():.0f} dias")
+print(f"Maior duração (válida): {validas.max():.0f} dias")
+print(f"ISG Médio: {saida['ISG'].mean():.2f}")
+print(f"Demanda Atual: {n} registros")
+print(f"Demanda Simulada: {int(n * FATOR_DEMANDA)} registros")
+
+amarelo = PatternFill('solid', start_color='FFF2CC')
 with pd.ExcelWriter(ARQUIVO_SAIDA, engine='openpyxl') as writer:
-    df.to_excel(writer, index=False)
-    ws = writer.sheets['Sheet1']
-    for nome in ('Data Inicial', 'Data Final'):
-        col = list(df.columns).index(nome) + 1
-        for linha in range(2, len(df) + 2):
+    saida.to_excel(writer, sheet_name='Dados', index=False)
+    ws = writer.sheets['Dados']
+    colunas = list(saida.columns)
+    cols_data = [colunas.index('Data Inicial') + 1, colunas.index('Data Final') + 1]
+    col_revisar = colunas.index('Revisar_Manual') + 1
+    for linha in range(2, n + 2):
+        for col in cols_data:
             ws.cell(linha, col).number_format = 'DD/MM/YYYY'
+            if ws.cell(linha, col_revisar).value:
+                ws.cell(linha, col).fill = amarelo
+    for col in cols_data:
         ws.column_dimensions[ws.cell(1, col).column_letter].width = 13
-print("Planilha tratada exportada com sucesso!")
+print('Planilha tratada exportada com sucesso!')
