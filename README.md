@@ -1,40 +1,42 @@
-# Pipeline ETL e Análise Operacional — Atlantic Ocean Services
+# Análise e Monitoramento de Serviços Marítimos — Atlantic Ocean Services
 
-Projeto desenvolvido para tratamento, padronização e análise de dados operacionais de serviços marítimos e portuários da **Atlantic Ocean Services**, preparando a base para visualização estratégica no Power BI.
+Projeto de extensão da disciplina **Tópicos de Big Data em Python** (Universidade Estácio de Sá — Campus Campo Grande), focado no tratamento, auditoria e estruturação de dados operacionais de serviços marítimos e portuários para análise gerencial e visualização no Power BI.
 
-## Objetivo do Projeto
-Transformar a base bruta (`TRABALHO.xlsx`), que apresentava inconsistências críticas de formatação de datas, em uma base limpa, confiável e estruturada (`TRABALHO_TRATADO.xlsx`), permitindo mensurar indicadores de desempenho operacional e simular cenários de expansão de demanda.
+## Arquitetura da Solução
 
-## Metodologia ETL (`main.py`)
-O pipeline em Python (`pandas` e `openpyxl`) executa quatro etapas principais:
+1. **Ingestão (`TRABALHO.xlsx`):** Leitura de 1.118 registros históricos distribuídos em 18 colunas (serviço, navio, cliente, estado, porto, colaborador, datas de início/fim e 10 critérios de avaliação).
+2. **Processamento e Auditoria (`main.py`):** Pipeline em Python (`pandas` e `openpyxl`) para limpeza de cabeçalhos, normalização de datas mistas, correção heurística e geração de indicadores[cite: 8, 12].
+3. **Armazenamento (`TRABALHO_TRATADO.xlsx`):** Exportação da aba `Dados` com datas padronizadas (`DD/MM/YYYY`), preservação das datas originais, colunas de auditoria e destaque visual em amarelo (`#FFF2CC`) nos registros sinalizados para revisão manual[cite: 8, 12].
+4. **Visualização (Power BI):** Dashboard interativo com KPIs operacionais, análise de satisfação e simulação de cenário sem tarifas dos EUA.
 
-1. **Padronização Multi-Formato de Datas:** Tratamento unificado de datas nativas do Excel, strings no padrão ISO (`AAAA-MM-DD`), strings no padrão brasileiro (`DD/MM/AAAA`), números seriais do Excel e correção de anos truncados (ex.: `/205` e `/206`).
-2. **Correção Cronológica Heurística:** Identificação e correção automática de **76 registros** inconsistentes utilizando análise de vizinhança cronológica (mediana local) e função de custo:
-   * **31 registros** com dia/mês invertidos simultaneamente nas datas inicial e final (padrão americano `MM/DD`).
-   * **23 registros** com erro de digitação no ano da data inicial (`ano -1`).
-   * **14 registros** com data inicial e final lançadas invertidas.
-   * **8 registros** adicionais com inversões pontuais de dia/mês ou ano.
-   * **0 registros** pendentes para revisão manual após o processamento.
-3. **Engenharia de Indicadores (KPIs):**
-   * `Duracao_Dias`: tempo de execução de cada operação portuária em dias.
-   * `ISG` (Índice de Satisfação Geral): média aritmética das 10 métricas de avaliação operacional (escala de 1 a 5).
-4. **Simulação de Cenário de Negócio:** Criação da coluna multiplicadora `Peso_Cenario_Sem_Taxas` (`1.20`) para projetar o impacto de **+20% na demanda** operacional diante da eliminação de tarifas comerciais pelos EUA.
+## Principais Tratamentos Implementados (`main.py`)
 
-## Principais Resultados Obtidos
+* **Normalização de Datas Mistas:** Unificação de datas nativas do Excel, padrão ISO (`AAAA-MM-DD`), formato brasileiro (`DD/MM/AAAA`), números seriais e correção de anos truncados (ex.: `/205` e `/206`) via expressões regulares[cite: 8, 12].
+* **Auditoria Heurística com Vizinhança Direta:** Detecção automática de conflitos de regionalidade (`MM/DD` vs. `DD/MM`), datas de início/término invertidas e erros de ano apoiada por mediana local, comparação com registros vizinhos (`DIST_VIZINHO`) e trava contra datas futuras (`HOJE`)[cite: 8, 12].
+* **Rastreabilidade e Revisão Manual:** Classificação das correções por nível de confiança (`alta` ou `baixa`), preservação das datas originais (`Data Inicial Original` e `Data Final Original`) e sinalização automática na coluna `Revisar_Manual` com destaque em amarelo na planilha final[cite: 8, 12].
+* **Engenharia de Atributos (KPIs):**
+  * `Duracao_Dias`: Tempo de execução de cada operação em dias[cite: 8, 12].
+  * `ISG`: Índice de Satisfação Geral (média dos 10 critérios de avaliação, escala de 1 a 5).
+  * `Peso_Cenario_Sem_Taxas`: Multiplicador (`1.20`) para simulação acadêmica de crescimento de +20% na demanda sem tarifas comerciais dos EUA[cite: 8, 12].
 
-| Indicador | Valor | Observação |
-| :--- | :--- | :--- |
-| **Demanda Atual** | `1.118 registros` | Total de operações analisadas na base |
-| **Demanda Simulada (+20%)** | `1.341 registros` | Projeção para cenário sem tarifas dos EUA |
-| **Duração Média** | `0,60 dias` | Mediana de `0 dias` e máxima válida de `31 dias` |
-| **ISG Médio** | `4,42 / 5,00` | Alta consistência na qualidade operacional |
+## Resultados Consolidados
 
-## Estrutura do Repositório
-* `main.py` — Script completo do pipeline de extração, limpeza heurística, cálculo de KPIs e exportação.
-* `TRABALHO.xlsx` — Base de dados bruta original.
-* `TRABALHO_TRATADO.xlsx` — Base tratada e formatada (`DD/MM/YYYY`), pronta para consumo no Power BI.
+* **Registros processados:** 1.118 operações
+* **Registros corrigidos automaticamente:** 73 (inversões de dia/mês, erros de ano e datas invertidas)[cite: 12]
+* **Registros sinalizados para revisão manual:** 41 (destacados em amarelo para conferência humana)[cite: 8, 12]
+* **Duração Média:** 0,60 dias (mediana de 0 dias; máxima válida de 31 dias)[cite: 12]
+* **ISG Médio:** 4,42[cite: 12]
+* **Demanda Simulada (Cenário sem Tarifas):** 1.341 atendimentos (+20%)[cite: 12]
 
 ## Como Executar
-1. Instale as dependências necessárias:
-   ```bash
-   pip install pandas openpyxl
+
+```bash
+# 1. Criar e ativar o ambiente virtual
+python -m venv .venv
+.venv\Scripts\activate
+
+# 2. Instalar as dependências
+pip install pandas openpyxl
+
+# 3. Executar o pipeline ETL
+python main.py
